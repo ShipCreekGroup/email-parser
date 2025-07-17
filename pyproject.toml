@@ -1,0 +1,11 @@
+[project]
+name = "fr-email-research"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "llm>=0.26",
+    "llm-gemini>=0.23",
+    "streamlit>=1.47.0",
+]

@@ -17,3 +17,11 @@ A simple Streamlit app template for you to modify!
    ```
    $ streamlit run streamlit_app.py
    ```
+
+### Development
+
+Export uv lockfile to requirements.txt:
+
+```bash
+uv export --format requirements-txt --output-file requirements.txt
+```
