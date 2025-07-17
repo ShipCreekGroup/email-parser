@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+import textwrap
 
 import jsonschema
 import llm
@@ -17,20 +18,25 @@ EMAIL_SCHEMA = {
         "properties": {
             "email_name": {
                 "type": "string",
-                "description": "A descriptive name for the email (derived from the subject or content)",
+                "description": "A short unique name that identifies the email. Either supplied directly, or derived from the subject or content.",
             },
             "sender": {
                 "type": "string",
-                "description": "The sender's name (Ted Eischeid, Team Eischeid, Les Gara, etc.)",
+                "description": "The sender's name.",
             },
             "subject": {"type": "string", "description": "The email subject line"},
             "preview": {
                 "type": "string",
-                "description": "The preview text that would appear in an email client",
+                "description": "The preview text that would appear in an email client.",
             },
             "body": {
                 "type": "string",
-                "description": "The full email content with line breaks preserved",
+                "description": "The full email content with line breaks preserved.",
+            },
+            "date": {
+                "type": "string",
+                "description": "The email date in yyyy-mm-dd format (optional).",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             },
         },
         "required": ["email_name", "sender", "subject", "preview", "body"],
@@ -45,19 +51,14 @@ def get_response(text: str, *, response_container) -> str:
     model = llm.get_model("gemini-2.5-flash-lite-preview-06-17")
 
     prompt = f"""
-Parse the following text into an array of email objects. Each email should have:
-- email_name: A descriptive name (derived from subject/content)
-- sender: The sender's name
-- subject: The email subject line  
-- preview: Preview text for email client
-- body: Full email content with line breaks preserved
+Parse the following text into an array of email objects.
 
 Return only valid JSON matching this schema:
 {json.dumps(EMAIL_SCHEMA, indent=2)}
 
 Text to parse:
 {text}
-"""
+""".strip()
 
     response = model.prompt(prompt, schema=EMAIL_SCHEMA, stream=True)
 
@@ -100,12 +101,13 @@ def parse_response(raw_response: str, *, error_container) -> list[dict[str, str]
 def emails_to_csv(emails: list[dict[str, str]]) -> str:
     """Convert list of email objects to CSV format."""
     output = io.StringIO()
-    field_names = ["email_number", "email_name", "sender", "subject", "preview", "body"]
+    field_names = ["email_number", "date", "email_name", "sender", "subject", "preview", "body" ]
     writer = csv.DictWriter(output, fieldnames=field_names, delimiter="\t")
     writer.writeheader()
     for i, email in enumerate(emails, 1):
         writer.writerow({
             "email_number": i,
+            "date": email.get("date", ""),
             **email
         })
     return output.getvalue()
@@ -118,18 +120,19 @@ def main():
         initial_sidebar_state="collapsed",
     )
     
-    # Custom CSS for better layout
-    st.markdown("""
-    <style>
-    .stExpander > div:first-child > div > div > div > div > div > div > div {
-        max-height: 400px;
-        overflow-y: auto;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
     st.title("📧 Email Parser")
-    st.write("Parse copy-pasted text from Google Docs into structured email objects")
+    with st.expander("ℹ️ How to Use", expanded=False):
+        fields = {
+            field_name: field["description"] for field_name, field in EMAIL_SCHEMA["items"]["properties"].items()
+        }
+        field_string = "\n".join([f"- **{name}**: {desc}" for name, desc in fields.items()])
+        readme = f"""
+Parses raw unstructured text from Google Docs into structured email objects.
+
+Each returned email object includes:
+{field_string}
+""".strip()
+        st.write(readme)
 
     input_text = st.text_area(
         "Paste your text here:",
@@ -157,6 +160,8 @@ def main():
             with tab1:
                 for i, email in enumerate(emails, 1):
                     with st.expander(f"Email {i}: {email['email_name']}", expanded=False):
+                        if email.get("date"):
+                            st.write(f"**Date:** {email['date']}")
                         st.write(f"**Sender:** {email['sender']}")
                         st.write(f"**Subject:** {email['subject']}")
                         st.write(f"**Preview:** {email['preview']}")
