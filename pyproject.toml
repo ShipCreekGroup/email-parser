@@ -7,5 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "llm>=0.26",
     "llm-gemini>=0.23",
+    "partial-json-parser>=0.2.1.1.post6",
     "streamlit>=1.47.0",
 ]

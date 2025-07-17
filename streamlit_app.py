@@ -2,10 +2,10 @@ import csv
 import io
 import json
 import logging
-import textwrap
 
 import jsonschema
 import llm
+import partial_json_parser
 import streamlit as st
 
 logging.basicConfig(level=logging.INFO)
@@ -45,8 +45,8 @@ EMAIL_SCHEMA = {
 }
 
 
-def get_response(text: str, *, response_container) -> str:
-    """Get raw response from LLM."""
+def stream_response(text: str):
+    """Stream raw response chunks from LLM."""
     # model = llm.get_model("gemini-2.0-flash")
     model = llm.get_model("gemini-2.5-flash-lite-preview-06-17")
 
@@ -61,19 +61,25 @@ Text to parse:
 """.strip()
 
     response = model.prompt(prompt, schema=EMAIL_SCHEMA, stream=True)
-
-    stream_placeholder = response_container.empty()
-
-    raw_response = ""
+    
     for chunk in response:
-        raw_response += chunk
-        stream_placeholder.code(raw_response, language="json")
-
-    return raw_response
+        yield chunk
 
 
-def parse_response(raw_response: str, *, error_container) -> list[dict[str, str]]:
-    """Parse and validate raw LLM response."""
+def parse_response_partial(raw_response: str) -> list[dict[str, str]] | None:
+    """Parse partial JSON response without validation."""
+    try:
+        emails = partial_json_parser.loads(raw_response)
+        schema_with_fields_optional = EMAIL_SCHEMA.copy()
+        schema_with_fields_optional["items"]["required"] = []
+        jsonschema.validate(emails, schema_with_fields_optional)
+        return emails
+    except Exception:
+        return None
+
+
+def parse_response_full(raw_response: str, *, error_container) -> list[dict[str, str]]:
+    """Parse and validate complete LLM response."""
     try:
         emails = json.loads(raw_response)
         jsonschema.validate(emails, EMAIL_SCHEMA)
@@ -147,33 +153,78 @@ Each returned email object includes:
         
         try:
             with st.spinner("Receiving response from LLM..."):
+                status = st.empty()
+                tab1, tab2, tab3 = st.tabs(["📧 Pretty View", "📄 JSON", "📊 CSV"])
+                
+                # Create placeholders for each tab content
+                with tab1:
+                    pretty_placeholder = st.empty()
+                with tab2:
+                    json_placeholder = st.empty()
+                with tab3:
+                    csv_placeholder = st.empty()
+                
                 with raw_output_expander:
                     response_container = st.container()
-                    raw_response = get_response(input_text, response_container=response_container)
-                error_container = st.container()
-                emails = parse_response(raw_response, error_container=error_container)
-
-            st.success(f"Successfully parsed {len(emails)} email(s)!")
-
-            tab1, tab2, tab3 = st.tabs(["📧 Pretty View", "📄 JSON", "📊 CSV"])
+                    stream_placeholder = response_container.empty()
+                    
+                    raw_response = ""
+                    partial_emails = []
+                    
+                    for chunk in stream_response(input_text):
+                        raw_response += chunk
+                        stream_placeholder.code(raw_response, language="json")
+                        
+                        # Try to parse partial results
+                        new_partial_emails = parse_response_partial(raw_response)
+                        if new_partial_emails and len(new_partial_emails) > len(partial_emails):
+                            partial_emails = new_partial_emails
+                            status.text(f"Partially parsed {len(partial_emails)} email(s) so far...")
+                            
+                            # Update tabs with partial results
+                            with pretty_placeholder.container():
+                                for i, email in enumerate(partial_emails, 1):
+                                    email_name = email.get('email_name', f'Email {i}')
+                                    with st.expander(f"Email {i}: {email_name}", expanded=False):
+                                        if (date := email.get("date")):
+                                            st.write(f"**Date:** {date}")
+                                        if (sender := email.get("sender")):
+                                            st.write(f"**Sender:** {sender}")
+                                        if (subject := email.get("subject")):
+                                            st.write(f"**Subject:** {subject}")
+                                        if (preview := email.get("preview")):
+                                            st.write(f"**Preview:** {preview}")
+                                        if (body := email.get("body")):
+                                            st.write("**Body:**")
+                                            st.text(body)
+                            
+                            json_placeholder.json(partial_emails)
+                            
+                            if partial_emails:
+                                csv_data = emails_to_csv(partial_emails)
+                                csv_placeholder.code(csv_data, language="csv", line_numbers=True)
             
-            with tab1:
+            error_container = st.container()
+            emails = parse_response_full(raw_response, error_container=error_container)
+            
+            # Final update with fully validated results
+            status.success(f"Successfully parsed {len(emails)} email(s)!")
+            
+            with pretty_placeholder.container():
                 for i, email in enumerate(emails, 1):
                     with st.expander(f"Email {i}: {email['email_name']}", expanded=False):
-                        if email.get("date"):
-                            st.write(f"**Date:** {email['date']}")
+                        if (date := email.get("date")):
+                            st.write(f"**Date:** {date}")
                         st.write(f"**Sender:** {email['sender']}")
                         st.write(f"**Subject:** {email['subject']}")
                         st.write(f"**Preview:** {email['preview']}")
                         st.write("**Body:**")
                         st.text(email["body"])
             
-            with tab2:
-                st.json(emails)
+            json_placeholder.json(emails)
             
-            with tab3:
-                csv_data = emails_to_csv(emails)
-                st.code(csv_data, language="csv", line_numbers=True)
+            csv_data = emails_to_csv(emails)
+            csv_placeholder.code(csv_data, language="csv", line_numbers=True)
 
         except Exception as e:
             st.error(f"Error parsing emails: {e}")
